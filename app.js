@@ -2058,6 +2058,7 @@ function render(){
   if(UI.tab==='book') bookBind();
   if(UI.tab==='cards') cardsBind();
   if(UI.tab==='set') setBind();
+  if(UI.tab==='home') examTick();
   timerPill();
 }
 function navBadge(id){return id==='me'&&ST.wrong.length?`<i class="badge num">${ST.wrong.length>99?'99+':ST.wrong.length}</i>`:'';}
@@ -2087,6 +2088,7 @@ const lvSeg=(cur,attr='data-diff')=>`<div class="lvseg" role="radiogroup" aria-l
 function homeHTML(){
   const last=ST.sessions[0], tot=ST.answered?Math.round(ST.correct/ST.answered*100):null, nT=allTopics().length;
   return head()+`<div class="wrap">
+   ${examHTML()}
    <section class="hero">
     <div class="hero-main">
      <p class="eyebrow num">Human Anatomy · BI112 · บทที่ 1 ถึง 7</p>
@@ -2663,6 +2665,85 @@ function showTimeUp(){
   $('#up-more').onclick=()=>{ ST.cd={total:300,left:300,running:true,kind:k}; save(); close(); };
   $('#up-ok').focus();
 }
+
+/* ===================== นับถอยหลังวันสอบกายวิภาค (ดึงจากเว็บตารางเรียน) ===================== */
+const EXAM_SRC='https://nytoff5389-boop.github.io/space-schedule/data/schedule.json';
+/* สำเนาสำรอง ใช้ตอนโหลดจากเว็บตารางเรียนไม่ได้ (อัปเดต 8 พ.ย. 2569) */
+const EXAM_FALLBACK=[
+  {date:'2026-12-11',start:'16:30',end:'18:00',title:'สอบก่อนกลางภาค (บรรยาย บทที่ 1-4, 16%)'},
+  {date:'2026-12-11',start:'18:00',end:'19:00',title:'สอบก่อนกลางภาค (ปฏิบัติการ บทที่ 1-4, 6%)'},
+  {date:'2027-01-20',start:'13:00',end:'15:00',title:'สอบกลางภาค (บรรยาย บทที่ 5-7, 14%)'},
+  {date:'2027-01-20',start:'15:00',end:'16:00',title:'สอบกลางภาค (ปฏิบัติการ บทที่ 5-7, 5%)'},
+  {date:'2027-02-12',start:'16:30',end:'18:00',title:'สอบก่อนปลายภาค (บรรยาย บทที่ 8-11, 16%)'},
+  {date:'2027-02-12',start:'18:00',end:'19:00',title:'สอบก่อนปลายภาค (ปฏิบัติการ บทที่ 8-11, 6%)'},
+  {date:'2027-03-19',start:'11:30',end:'13:30',title:'สอบปลายภาค (บรรยาย บทที่ 12-15, 16%)'},
+  {date:'2027-03-19',start:'13:30',end:'14:30',title:'สอบปลายภาค (ปฏิบัติการ บทที่ 12-15, 6%)'}
+];
+const EXAM_KEY='anatomeow.exams';
+function examParse(list){
+  return list.map(e=>{
+    const m=String(e.title).match(/^(.*?)\s*\((.*)\)\s*$/)||[null,e.title,''];
+    const inner=m[2]||'', lab=/ปฏิบัติ|lab/i.test(e.title);
+    const pct=(inner.match(/(\d+(?:\.\d+)?)\s*%/)||[])[1];
+    const chap=(inner.match(/บทที่\s*\d+(?:\s*[-–]\s*\d+)?/)||[''])[0];
+    return {round:m[1].trim(),lab,pct:pct?pct+'%':'',chap,date:e.date,start:e.start,end:e.end,
+      t0:new Date(`${e.date}T${e.start}:00+07:00`).getTime(),t1:new Date(`${e.date}T${e.end||e.start}:00+07:00`).getTime()};
+  }).sort((a,b)=>a.t0-b.t0||a.lab-b.lab);
+}
+let EXAMS=examParse(EXAM_FALLBACK), EXAM_FROM='สำเนาในแอป';
+try{ const c=JSON.parse(localStorage.getItem(EXAM_KEY)); if(c&&c.list&&c.list.length){ EXAMS=examParse(c.list); EXAM_FROM='เว็บตารางเรียน'; } }catch(e){}
+function examPick(d){
+  const codes=Object.entries(d.courses||{}).filter(([k,v])=>/กายวิภาค|anatomy/i.test((v.name||'')+' '+(v.en||''))).map(([k])=>k);
+  return (d.exams||[]).filter(e=>codes.includes(e.code));
+}
+fetch(EXAM_SRC,{cache:'no-cache'}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{
+  const list=examPick(d); if(!list.length) return;
+  EXAMS=examParse(list); EXAM_FROM='เว็บตารางเรียน';
+  try{ localStorage.setItem(EXAM_KEY,JSON.stringify({list,at:Date.now()})); }catch(e){}
+  const b=$('#exb'); if(b){ b.outerHTML=examHTML(); examTick(); }
+}).catch(()=>{});
+
+const TH_DAY=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
+const exDate=e=>{const d=new Date(e.date+'T12:00:00+07:00');return `วัน${TH_DAY[d.getUTCDay()]}ที่ ${d.getUTCDate()} ${THM[d.getUTCMonth()]} ${d.getUTCFullYear()+543}`;};
+/* รอบสอบถัดไป = วันที่มีสอบที่ยังไม่จบ ทั้งบรรยายและแล็บของวันนั้น */
+function examNext(now=Date.now()){
+  const up=EXAMS.find(e=>e.t1>now); if(!up) return null;
+  return EXAMS.filter(e=>e.date===up.date&&e.round===up.round);
+}
+function examCard(e){
+  return `<article class="exc ${e.lab?'lab':'lec'}" data-t0="${e.t0}" data-t1="${e.t1}">
+    <header class="exc-h"><span class="exc-k">${e.lab?'Lab ปฏิบัติการ':'บรรยาย'}</span>${e.pct?`<span class="exc-p num">${e.pct}</span>`:''}</header>
+    <p class="exc-ch">${esc(e.chap||e.round)}</p>
+    <div class="exc-cd num" aria-live="off"><span><b data-u="d">0</b><small>วัน</small></span><span><b data-u="h">00</b><small>ชั่วโมง</small></span><span><b data-u="m">00</b><small>นาที</small></span><span><b data-u="s">00</b><small>วินาที</small></span></div>
+    <p class="exc-st" data-st></p>
+    <p class="exc-when">${I.clock}<span>${exDate(e)}<br><b class="num">${e.start}${e.end?' ถึง '+e.end:''} น.</b></span></p></article>`;
+}
+function examHTML(){
+  const nx=examNext();
+  if(!nx) return `<section class="exb done" id="exb"><img src="${IMG.cat1}" alt="" class="exb-cat"><div><p class="exb-k">กายวิภาคศาสตร์</p><h2>สอบครบทุกรอบแล้ว เก่งมาก</h2></div></section>`;
+  const rest=EXAMS.filter(e=>!e.lab&&e.t1>Date.now()&&e.date!==nx[0].date);
+  return `<section class="exb" id="exb" aria-label="นับถอยหลังวันสอบ">
+    <div class="exb-top"><div><p class="exb-k">นับถอยหลังสอบกายวิภาคศาสตร์</p><h2>${esc(nx[0].round)}</h2></div><img src="${IMG.cat2}" alt="" class="exb-cat"></div>
+    <div class="exb-grid ${nx.length>1?'two':''}">${nx.map(examCard).join('')}</div>
+    ${rest.length?`<div class="exb-next"><span>รอบถัดไป</span>${rest.map(e=>`<span class="exb-chip num">${esc(e.round)} · ${new Date(e.date+'T12:00:00+07:00').getUTCDate()} ${THM[new Date(e.date+'T12:00:00+07:00').getUTCMonth()]}</span>`).join('')}</div>`:''}
+    <p class="exb-src">ข้อมูลจาก${EXAM_FROM} · เวลาประเทศไทย</p></section>`;
+}
+function examTick(){
+  const now=Date.now(); let ended=false;
+  $$('.exc').forEach(c=>{
+    const t0=+c.dataset.t0, t1=+c.dataset.t1, st=c.querySelector('[data-st]');
+    if(now>=t1){ ended=true; return; }
+    let s=Math.max(0,Math.floor((t0-now)/1000)); const live=now>=t0;
+    c.classList.toggle('live',live); c.classList.toggle('soon',!live&&t0-now<24*3600e3);
+    if(live) s=Math.floor((t1-now)/1000);
+    const v={d:Math.floor(s/86400),h:n2(Math.floor(s%86400/3600)),m:n2(Math.floor(s%3600/60)),s:n2(s%60)};
+    c.querySelectorAll('[data-u]').forEach(b=>{ const x=String(v[b.dataset.u]); if(b.textContent!==x) b.textContent=x; });
+    const txt=live?'กำลังสอบอยู่ เหลือเวลาอีก':(t0-now<24*3600e3?'สอบพรุ่งนี้หรือวันนี้ เตรียมตัวให้พร้อม':'');
+    if(st.textContent!==txt) st.textContent=txt;
+  });
+  if(ended){ const b=$('#exb'); if(b){ b.outerHTML=examHTML(); } }
+}
+setInterval(()=>{ if(document.visibilityState==='visible'&&$('#exb')) examTick(); },1000);
 
 /* ===================== หน้าเริ่มเกม ===================== */
 const ENTER_SND=new Audio('media/click.mp3'); ENTER_SND.preload='auto';
